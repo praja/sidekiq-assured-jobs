@@ -313,6 +313,7 @@ module Sidekiq
       # this can freeze Redis for hundreds of milliseconds and surface as
       # Redis::TimeoutError in unrelated web requests. SCAN is incremental and safe.
       def scan_keys(conn, pattern)
+        logger.info "AssuredJobs [REDIS-SCAN] Scanning pattern: '#{pattern}' using SCAN command (cursor loop)"
         keys = []
         cursor = 0
         loop do
@@ -321,6 +322,7 @@ module Sidekiq
           keys.concat(batch)
           break if cursor == 0
         end
+        logger.info "AssuredJobs [REDIS-SCAN] Completed SCAN for '#{pattern}' - found #{keys.size} keys"
         keys
       end
 
