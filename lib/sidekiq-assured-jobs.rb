@@ -81,8 +81,8 @@ module Sidekiq
 
           redis_sync do |conn|
             # Get all job keys and instance keys (using custom namespacing)
-            job_keys = conn.keys(namespaced_key("jobs:*"))
-            instance_keys = conn.keys(namespaced_key("instance:*"))
+            job_keys = scan_keys(conn, namespaced_key("jobs:*"))
+            instance_keys = scan_keys(conn, namespaced_key("instance:*"))
 
             # Extract instance IDs from keys
             live_instances = instance_keys.map { |key| key.split(":").last }.to_set
@@ -137,8 +137,8 @@ module Sidekiq
 
         redis_sync do |conn|
           # Get all job keys and instance keys
-          job_keys = conn.keys(namespaced_key("jobs:*"))
-          instance_keys = conn.keys(namespaced_key("instance:*"))
+          job_keys = scan_keys(conn, namespaced_key("jobs:*"))
+          instance_keys = scan_keys(conn, namespaced_key("instance:*"))
 
           # Extract live instance IDs
           live_instances = instance_keys.map { |key| key.split(":").last }.to_set
@@ -173,7 +173,7 @@ module Sidekiq
 
         redis_sync do |conn|
           # Get live instances
-          instance_keys = conn.keys(namespaced_key("instance:*"))
+          instance_keys = scan_keys(conn, namespaced_key("instance:*"))
           instance_keys.each do |key|
             instance_id = key.split(":").last
             heartbeat = conn.get(key)
@@ -184,7 +184,7 @@ module Sidekiq
           end
 
           # Get dead instances with orphaned jobs
-          job_keys = conn.keys(namespaced_key("jobs:*"))
+          job_keys = scan_keys(conn, namespaced_key("jobs:*"))
           job_keys.each do |job_key|
             instance_id = job_key.split(":").last
             unless instances[instance_id]
@@ -209,7 +209,7 @@ module Sidekiq
             job_data = JSON.parse(job_payload)
 
             # Find which instance this job belongs to
-            job_keys = conn.keys(namespaced_key("jobs:*"))
+            job_keys = scan_keys(conn, namespaced_key("jobs:*"))
             job_keys.each do |job_key|
               if conn.sismember(job_key, jid)
                 instance_id = job_key.split(":").last
@@ -306,6 +306,26 @@ module Sidekiq
         @delayed_recovery_count ||= ENV.fetch("ASSURED_JOBS_DELAYED_RECOVERY_COUNT", "1").to_i
         @delayed_recovery_interval ||= ENV.fetch("ASSURED_JOBS_DELAYED_RECOVERY_INTERVAL", "300").to_i
         @auto_recovery_enabled ||= ENV.fetch("ASSURED_JOBS_AUTO_RECOVERY", "true").downcase == "true"
+      end
+
+      # SCAN-based replacement for KEYS. KEYS is O(N) and blocks the single-threaded
+      # Redis server while it scans the entire keyspace; on a large production instance
+      # this can freeze Redis for hundreds of milliseconds and surface as
+      # Redis::TimeoutError in unrelated web requests. SCAN is incremental and safe.
+      def scan_keys(conn, pattern)
+        logger.debug "AssuredJobs [REDIS-SCAN] Scanning pattern: '#{pattern}' using SCAN command (cursor loop)"
+        keys = []
+        cursor = 0
+        loop do
+          cursor, batch = conn.scan(cursor, match: pattern, count: 1000)
+          cursor = cursor.to_i
+          keys.concat(batch)
+          break if cursor == 0
+        end
+        # SCAN may return the same key more than once
+        keys.uniq!
+        logger.debug "AssuredJobs [REDIS-SCAN] Completed SCAN for '#{pattern}' - found #{keys.size} keys"
+        keys
       end
 
       def setup_heartbeat
