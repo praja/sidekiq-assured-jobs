@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - **Redis key lookup uses `SCAN` instead of `KEYS`**: orphan recovery, the web dashboard and instance lookups now iterate keys incrementally with `SCAN` (batch size 1000). `KEYS` is O(N) and blocks the Redis server for the whole keyspace walk, which on large production instances could stall Redis and cause `Redis::TimeoutError` in unrelated requests.
-- Added info-level logging around each SCAN pass (pattern and number of keys found).
+- Added debug-level logging around each SCAN pass (pattern and number of keys found); scanned keys are de-duplicated since SCAN may return a key more than once.
 
 ## [1.1.0] - 2025-01-03
 
